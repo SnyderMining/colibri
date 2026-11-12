@@ -456,6 +456,12 @@ h3.mdh{font-size:18px}
 .thinking>summary:hover{color:var(--ink)}
 
 .pop button[hidden]{display:none}
+/* + menu: hovering "Skill" opens the list of skills beside it */
+.pop .skillsub{position:absolute;left:calc(100% + 4px);min-width:240px;max-width:320px;max-height:60vh;overflow:auto;padding:6px;border:1px solid var(--line);border-radius:14px;background:var(--surface);box-shadow:var(--sh-pop);display:none}
+.pop .skillsub.open{display:block}
+.pop .skillsub button{flex-direction:column;align-items:flex-start;gap:2px;font-family:inherit}
+.pop .skillsub button span{font-size:12px;color:var(--ink-muted);white-space:normal;line-height:1.3}
+.pop [data-k=skills]::after{content:"\203A";margin-left:8px;color:var(--ink-muted)}
 
 /* expert map by block */
 .blocks{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px}
@@ -1370,6 +1376,15 @@ function renderPlus(){const reads=readsImages(),gen=MODELS.some(x=>(x.capabiliti
   const sk=$('#plusPop [data-k=skills]');sk.hidden=!skillsOn().length;$('#skillsText').textContent=ST.skills===false?'Spento':'Acceso';
   const mc=$('#plusPop [data-k=mcp]');mc.hidden=!mcpOn().length;$('#mcpText').textContent=ST.mcp===false?'Spento':'Acceso'}
 $('#plusPop [data-k=reason]').insertAdjacentHTML('beforebegin','<button data-k="web"><svg class="ic ic--sm"><use href="#i-search"/></svg>Ricerca web<small id="webText">Spento</small></button><button data-k="skills" hidden><svg class="ic ic--sm"><use href="#i-layers"/></svg>Skill<small id="skillsText">Acceso</small></button><button data-k="mcp" hidden><svg class="ic ic--sm"><use href="#i-term"/></svg>Strumenti MCP<small id="mcpText">Acceso</small></button>');
+/* hovering the Skill row opens the enabled skills; a click puts /name at the start of the prompt */
+$('#plusPop [data-k=skills]').insertAdjacentHTML('afterend','<div class="skillsub" id="skillSub"></div>');
+(()=>{const row=$('#plusPop [data-k=skills]'),sub=$('#skillSub');let t=0;
+  const show=()=>{clearTimeout(t);const list=skillsOn();if(!list.length)return;
+    sub.innerHTML=list.map(x=>{const d=x.description||'';return `<button data-k="useskill" data-name="${esc(x.name)}" title="${esc(d)}">/${esc(x.name)}<span>${esc(d.length>90?d.slice(0,88)+'…':d)}</span></button>`}).join('');
+    sub.style.bottom=(row.offsetParent.clientHeight-row.offsetTop-row.offsetHeight)+'px';sub.classList.add('open')};
+  const hide=()=>{clearTimeout(t);t=setTimeout(()=>sub.classList.remove('open'),200)};
+  for(const el of [row,sub]){el.addEventListener('mouseenter',show);el.addEventListener('mouseleave',hide)}
+  $('#plusBtn').addEventListener('click',()=>sub.classList.remove('open'))})();
 /* under the box, left of the send hint: the composer's top edge is the mascot's */
 $('#hintText').insertAdjacentHTML('beforebegin','<button class="webchip" id="webChip" hidden title="La ricerca web è accesa: clic per spegnerla"><svg class="ic ic--xs"><use href="#i-search"/></svg>Ricerca web<svg class="ic ic--xs webchip__x"><use href="#i-x"/></svg></button><span class="spacer"></span>');
 $('#webChip').onclick=()=>{ST.web=false;saveST();renderPlus()};
@@ -1381,7 +1396,9 @@ $('#plusPop').addEventListener('click',e=>{const b=e.target.closest('button');if
   if(b.dataset.k==='reason'){ST.reason=!ST.reason;saveST();renderPlus();renderSettings()}
   if(b.dataset.k==='web'){ST.web=!ST.web;saveST();renderPlus()}
   if(b.dataset.k==='skills'){ST.skills=ST.skills===false;saveST();renderPlus()}
-  if(b.dataset.k==='mcp'){ST.mcp=ST.mcp===false;saveST();renderPlus()}});
+  if(b.dataset.k==='mcp'){ST.mcp=ST.mcp===false;saveST();renderPlus()}
+  if(b.dataset.k==='useskill'){$('#skillSub').classList.remove('open');const p=$('#prompt');p.value='/'+b.dataset.name+' '+p.value.replace(/^\/[\w-]+\s*/,'');
+    ST.skills=true;saveST();renderPlus();p.focus();p.setSelectionRange(p.value.length,p.value.length);p.dispatchEvent(new Event('input'))}});
 $('#modeOff').onclick=()=>{app.dataset.mode='text'};
 
 /* ================================================= streaming chat */
