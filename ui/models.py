@@ -292,7 +292,14 @@ def tier_of(argv, env):
 
 def gateway_tier():
     p = gateway_proc()
-    return tier_of(p["argv"], p["env"]) if p and p["coli"] else None
+    if p and p["coli"]:
+        return tier_of(p["argv"], p["env"])
+    if not LINUX:                 # Windows: the tier of the model `coli setup` set up, while its gateway answers
+        import win_switch
+        c = win_switch._cfg() if win_switch.available() else None
+        if c and win_switch._answering(sys.modules[__name__]):
+            return tier_of(list(c.get("args") or []), dict(c.get("env") or {}))
+    return None
 
 
 # ------------------------------------------------------------------ the machine
@@ -1345,6 +1352,14 @@ def post(path, b):
                                   "restart coli serve with --ctx"}
         import win_switch
         return 200, job_view(win_switch.set_ctx(sys.modules[__name__], b.get("ctx"), bool(b.get("force"))))
+    if path in ("/models/unload", "/models/load"):    # Windows: free the GPU, start the model again
+        if not _win_can_switch():
+            return 400, {"error": "unload and load work only with a coli setup on Windows for now: "
+                                  "stop the server with `coli stop`"}
+        import win_switch
+        if path == "/models/load":
+            return 200, job_view(win_switch.load(sys.modules[__name__]))
+        return 200, job_view(win_switch.unload(sys.modules[__name__], bool(b.get("force"))))
     m = re.fullmatch(r"/models/jobs/([0-9a-f]+)/cancel", path)
     if m and m.group(1) in JOBS:
         JOBS[m.group(1)]["cancel"] = True

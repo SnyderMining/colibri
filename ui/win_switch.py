@@ -149,6 +149,55 @@ def set_ctx(models, ctx, force=False):
     return job
 
 
+def unload(models, force=False):
+    """stop the model server and its engine (`coli stop`): the GPU and the RAM are free again.
+    The chat UI keeps running; load() starts the same model again."""
+    if _answering(models) and not force and not models.gw_idle():
+        raise RuntimeError("the engine is answering a request: try again when it has finished")
+    if not models._switching.acquire(blocking=False):
+        raise RuntimeError("already switching models: wait for it to finish")
+    job = models.new_job("unload", os.path.basename((_cfg() or {}).get("model_dir") or "model"))
+
+    def go():
+        try:
+            job.update(state="stopping", msg="stopping the model and its engine")
+            _coli(models, "stop", timeout=120)
+            _wait(models, job, False, 120)
+            job.update(state="done", msg="unloaded: the GPU is free")
+            models._inst["at"] = 0
+            models._gw["at"] = 0
+        except Exception as e:   # noqa: BLE001 - said on the page
+            job.update(state="error", msg=str(e)[:400])
+        finally:
+            models._switching.release()
+    threading.Thread(target=go, daemon=True).start()
+    return job
+
+
+def load(models):
+    """start the model `coli setup` saved again, after unload()"""
+    if _answering(models):
+        raise RuntimeError("the model is already running")
+    if not models._switching.acquire(blocking=False):
+        raise RuntimeError("already switching models: wait for it to finish")
+    job = models.new_job("load", os.path.basename((_cfg() or {}).get("model_dir") or "model"))
+
+    def go():
+        try:
+            job.update(state="starting", msg="starting the model")
+            _coli(models, "start", "--background", "--no-browser", timeout=300)
+            _wait(models, job, True, 1800)
+            job.update(state="done", msg="in use")
+            models._inst["at"] = 0
+            models._gw["at"] = 0
+        except Exception as e:   # noqa: BLE001 - said on the page
+            job.update(state="error", msg=str(e)[:400])
+        finally:
+            models._switching.release()
+    threading.Thread(target=go, daemon=True).start()
+    return job
+
+
 def switch(models, path, force=False, tier=None):
     path = os.path.realpath(path)
     if not os.path.isdir(path) or not models.under_roots(path):

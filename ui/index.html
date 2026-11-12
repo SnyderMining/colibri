@@ -785,6 +785,7 @@ a.cite{display:inline-grid;place-items:center;min-width:17px;height:17px;padding
       <div class="mbest" id="mBest"></div>
       <p class="demo-note" id="mEstNote"></p>
       <div id="mJobsWrap" hidden><div class="sectlabel">Download e avvii</div><div class="card mlist" id="mJobs"></div></div>
+      <div class="card" id="mLoadState" style="margin-bottom:10px"></div>
       <div class="sectlabel">In uso adesso</div>
       <div id="runningModels"></div>
       <div class="sectlabel">Sul disco</div><div class="card mlist" id="mInstalled"></div>
@@ -1144,6 +1145,8 @@ async function refresh(){
   renderConn();renderModelMenus();renderModelsPage();renderSystem();renderPlus();
 }
 setInterval(()=>{if(!busy)refresh()},8000);
+/* the Models page re-reads what is loaded while it is open, so a switch, an unload or a start shows up by itself */
+setInterval(()=>{if(app.dataset.view==='models'&&typeof loadModels==='function'&&!document.hidden)loadModels()},10000);
 
 /* ================================================= model menus */
 const menu=$('#menu');
@@ -1695,15 +1698,25 @@ $('#s1go').onclick=async()=>{const opts=$('#s1opts').value.split(/\n|,/).map(s=>
   catch(e){err.textContent='Errore: '+e.message}finally{b.disabled=false;b.textContent='Assegna le probabilità'}};
 
 /* ================================================= models page (real) */
-function renderModelsPage(){const el=$('#runningModels');if(!online){el.innerHTML=`<div class="card"><p class="sub" style="margin:0">Il motore non risponde su ${esc(ST.base)}.</p></div>`;return}
+/* true while a reply is being written or queued: only then is a switch or an unload worth a confirmation */
+function engineBusy(){const sc=(HEALTH&&HEALTH.scheduler)||{};return ((sc.active||0)+(sc.queued||0))>0}
+/* what is loaded right now, in one line: the model and where it runs, or that the GPU is free */
+function loadStateHTML(){const on=online&&MODELS&&MODELS.length;
+  const tier=MCAT?.in_use_tier==='gpu'?' · on the GPU':MCAT?.in_use_tier==='ram'?' · on the CPU':'';
+  return on?`<div class="row" style="gap:10px"><span class="badge badge--accent">Loaded</span><b>${esc(pretty(MODELS[0].id))}</b><span class="sub" style="margin:0">${tier.replace(/^ · /,'')}</span></div>`
+    :`<div class="row" style="gap:10px"><span class="badge badge--plain">Not loaded</span><b>No model is loaded</b><span class="sub" style="margin:0">the GPU and RAM are free</span></div>`}
+function renderModelsPage(){const lsEl=$('#mLoadState');if(lsEl)lsEl.innerHTML=loadStateHTML();const el=$('#runningModels');if(!online){el.innerHTML=`<div class="card"><p class="sub" style="margin:0">Il motore non risponde su ${esc(ST.base)}.</p>${MCAT?.switch_via==='setup'?`<div class="row" style="margin-top:8px"><button class="sbtn" data-load="1" title="Start the saved model again">Start model</button></div>`:''}</div>`;return}
   const h=HEALTH||{};el.innerHTML=MODELS.map(m=>`<div class="card running"><span class="running__icon"><svg class="ic"><use href="#i-cube"/></svg></span><div class="running__text"><span class="running__name">${esc(pretty(m.id))}</span>
     <div class="facts"><span><b>${esc(h.arch||'')}</b> motore</span><span><b>${nf(m.context_length||h.context_tokens||0)}</b> contesto</span><span><b>${h.kv_slots||1}</b> slot KV</span><span>legge <b>${(m.input_modalities||['text']).map(x=>x==='image'?'immagini':'testo').join(' e ')}</b></span></div>
     <div class="row" style="gap:6px">${(m.capabilities||[]).map(c=>`<span class="badge badge--plain">${c==='systemone'?'System One':c==='chat'?'chat':c==='image_generation'?'genera immagini':esc(c)}</span>`).join('')}${h.context_compaction?'<span class="badge badge--plain">riassume il contesto</span>':''}${h.continue_assistant?'<span class="badge badge--plain">continua le risposte</span>':''}</div></div>
-    <div class="row">${m.id===model?'<span class="badge badge--accent">In uso</span>':`<button class="sbtn" data-use="${esc(m.id)}">Usa</button>`}<button class="sbtn" data-chat="1">Apri la chat</button></div>${ctxHTML(m.context_length||h.context_tokens||0)}</div>`).join('')}
+    <div class="row">${m.id===model?'<span class="badge badge--accent">In uso</span>':`<button class="sbtn" data-use="${esc(m.id)}">Usa</button>`}<button class="sbtn" data-chat="1">Apri la chat</button>${MCAT?.switch_via==='setup'?`<button class="sbtn" data-unload="1" title="Stop the model and free the GPU and RAM">Unload model</button>`:''}</div>${ctxHTML(m.context_length||h.context_tokens||0)}</div>`).join('')}
 /* the context (Windows with coli setup: ui/win_switch.py restarts the model with it) */
 function ctxHTML(cur){if(MCAT?.switch_via!=='setup')return '';const opts=[8192,16384,32768,65536,131072,262144];if(cur&&!opts.includes(cur))opts.push(cur);opts.sort((a,b)=>a-b);
   return `<div class="row ctxrow" style="gap:8px;margin-top:4px"><span class="sub" style="margin:0">Contesto</span><select class="select" id="ctxSel" style="width:auto">${opts.map(n=>`<option value="${n}" ${n===cur?'selected':''}>${nf(n)}</option>`).join('')}<option value="0">automatico</option></select><button class="sbtn" data-ctxset="1" title="Riavvia il modello con questo contesto">Applica</button></div>`}
 $('#runningModels').addEventListener('click',async e=>{const u=e.target.closest('[data-use]');if(u)chooseModel(u.dataset.use,true),renderModelsPage();if(e.target.closest('[data-chat]'))setView('chat');
+  const ul=e.target.closest('[data-unload],[data-load]');if(ul){const un=ul.hasAttribute('data-unload');
+    if(un&&engineBusy()&&!confirm('Unload the model and free the GPU and RAM?\n\nReplies in progress will be interrupted. You will need to start a model again to chat.'))return;
+    ul.disabled=true;try{const r=await fetch(url(un?'/models/unload':'/models/load'),{method:'POST',headers:MH(),body:'{}'});const j=await r.json();if(!r.ok)throw new Error(j.error);setView('models');pollJobs()}catch(err){ul.disabled=false;say(err.message,3600)}return}
   const b=e.target.closest('[data-ctxset]');if(!b)return;const n=+$('#ctxSel').value;
   if(!confirm(tr('Riavvio il modello con un contesto di')+' '+(n?nf(n):tr('automatico'))+'?\n\n'+tr('Le risposte in corso si interrompono. Il caricamento può durare qualche minuto.')))return;
   b.disabled=true;try{const r=await fetch(url('/models/ctx'),{method:'POST',headers:MH(),body:JSON.stringify({ctx:n})});const j=await r.json();if(!r.ok)throw new Error(j.error);setView('models');pollJobs()}catch(err){b.disabled=false;say(err.message,3600)}});
@@ -1784,7 +1797,7 @@ $('#view-models').addEventListener('click',async e=>{const t=e.target.closest('b
     try{const r=await fetch(url('/models/download'),{method:'POST',headers:MH(),body:JSON.stringify(body)});const j=await r.json();if(!r.ok)throw new Error(j.error);t.textContent='In coda';pollJobs()}catch(err){t.disabled=false;say('Download: '+err.message,3600)}return}
   if(t.dataset.muse){const name=(t.closest('.mrow,.mbest__c')?.querySelector('.mrow__name,.mbest__name')?.firstChild?.textContent||'').trim(),tier=MCAT?.switch_via==='setup'?undefined:t.dataset.tier;   /* Windows: the engine coli setup chose, whatever the card */
     /* a dialog is not in the page: its sentences go through the translation here */
-    if(!confirm(tr(`Riavvio il server con ${name}${tier==='gpu'?tr(', con la GPU'):tier==='ram'?tr(', solo sulla CPU'):''}?`)+'\n\n'+tr('Le risposte in corso, anche quelle di pi, si interrompono. Il caricamento può durare qualche minuto.')))return;
+    if(engineBusy()&&!confirm(tr(`Riavvio il server con ${name}${tier==='gpu'?tr(', con la GPU'):tier==='ram'?tr(', solo sulla CPU'):''}?`)+'\n\n'+tr('Le risposte in corso, anche quelle di pi, si interrompono. Il caricamento può durare qualche minuto.')))return;
     t.disabled=true;try{const r=await fetch(url('/models/use'),{method:'POST',headers:MH(),body:JSON.stringify({path:t.dataset.muse,tier})});const j=await r.json();if(!r.ok)throw new Error(j.error);pollJobs()}catch(err){t.disabled=false;say(err.message,3600)}return}
   const c=t.dataset.mcancel;if(c){await fetch(url(`/models/jobs/${c}/cancel`),{method:'POST',headers:MH(),body:'{}'});pollJobs()}});
 const JOBSTATE={building:'compila il motore',queued:'in coda',downloading:'scarica',installing:'prepara',done:'fatto',error:'errore',cancelled:'annullato',stopping:'ferma il server',starting:'avvia il modello'};
